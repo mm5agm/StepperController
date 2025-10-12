@@ -25,6 +25,9 @@ static void printMac(const uint8_t *mac)
 // ESP-NOW receive callback (older Arduino core signature used by PlatformIO)
 void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 {
+  // Note: stepperGUI uses newer signature with esp_now_recv_info_t
+  // but PlatformIO uses older signature with direct MAC parameter
+  
   Serial.print("onDataRecv called from ");
   if (mac_addr) {
     printMac(mac_addr);
@@ -60,7 +63,7 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   else Serial.printf("ACK send failed: %d\n", r);
 }
 
-// Optional send callback for logging
+// Optional send callback for logging (older signature for PlatformIO compatibility)
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   Serial.print("onDataSent to ");
@@ -124,6 +127,25 @@ void sendMessage(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t 
 bool up_limit_tripped() { return digitalRead(UP_LIMIT_PIN) == LOW; }
 bool down_limit_tripped() { return digitalRead(DOWN_LIMIT_PIN) == LOW; }
 
+// Safety check for movement direction
+bool movement_safe(bool direction) {
+  if (direction && up_limit_tripped()) {
+    return false; // Can't move up - up limit tripped
+  }
+  if (!direction && down_limit_tripped()) {
+    return false; // Can't move down - down limit tripped
+  }
+  return true; // Movement is safe
+}
+
+// Log current limit switch status
+void log_limit_status() {
+  Serial.print("Limit switches: UP=");
+  Serial.print(up_limit_tripped() ? "TRIPPED" : "OK");
+  Serial.print(", DOWN=");
+  Serial.println(down_limit_tripped() ? "TRIPPED" : "OK");
+}
+
 // Movement primitives
 void single_step(long pulseDelay, bool dir)
 {
@@ -186,34 +208,74 @@ void handle_command(const Message &msg)
       sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       break;
     case CMD_UP_SLOW:
-      PD = SLOW_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (up_limit_tripped()) {
+        Serial.println("UP movement blocked - up limit switch tripped");
+        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = SLOW_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_UP_MEDIUM:
-      PD = MEDIUM_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (up_limit_tripped()) {
+        Serial.println("UP movement blocked - up limit switch tripped");
+        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = MEDIUM_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_UP_FAST:
-      PD = FAST_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (up_limit_tripped()) {
+        Serial.println("UP movement blocked - up limit switch tripped");
+        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = FAST_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_DOWN_SLOW:
-      PD = SLOW_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (down_limit_tripped()) {
+        Serial.println("DOWN movement blocked - down limit switch tripped");
+        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = SLOW_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_DOWN_MEDIUM:
-      PD = MEDIUM_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (down_limit_tripped()) {
+        Serial.println("DOWN movement blocked - down limit switch tripped");
+        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = MEDIUM_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_DOWN_FAST:
-      PD = FAST_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      if (down_limit_tripped()) {
+        Serial.println("DOWN movement blocked - down limit switch tripped");
+        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = FAST_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      }
       break;
     case CMD_MOVE_TO:
       moveTarget = constrain((int)msg.param, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
-      PD = FAST_PD; // Use fast speed for move to operations
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
-      startMoveTo(moveTarget); // Initialize non-blocking moveTo operation
+      
+      // Check if movement direction would hit a limit switch
+      if (moveTarget > position && up_limit_tripped()) {
+        Serial.println("MOVE_TO blocked - target requires UP movement but up limit tripped");
+        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else if (moveTarget < position && down_limit_tripped()) {
+        Serial.println("MOVE_TO blocked - target requires DOWN movement but down limit tripped");
+        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else {
+        PD = FAST_PD; // Use fast speed for move to operations
+        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        startMoveTo(moveTarget); // Initialize non-blocking moveTo operation
+      }
       break;
     case CMD_MOVE_TO_DOWN_LIMIT:
       Stop = false; state = STATE_MOVE_TO_DOWN_LIMIT;
@@ -282,6 +344,11 @@ void setup()
   }
 
   Serial.println("Setup done");
+  
+  // Log initial limit switch status
+  log_limit_status();
+  Serial.print("Initial position: ");
+  Serial.println(position);
   
   // Send reset command to GUI after controller startup
   delay(2000); // Wait for system to stabilize and GUI to be ready
