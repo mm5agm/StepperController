@@ -95,7 +95,7 @@ const unsigned long SEND_INTERVAL_MS = 100;
 unsigned long lastSendTime = 0;
 
 // Limit switch simulation for testing (set to true to enable)
-const bool SIMULATE_LIMIT_SWITCHES = true;
+const bool SIMULATE_LIMIT_SWITCHES = false;
 unsigned long lastSimulationTime = 0;
 const unsigned long SIMULATION_INTERVAL_MS = 1000; // 1 second
 bool simulated_up_limit = false;
@@ -433,7 +433,7 @@ void loop()
   Message msg;
   while (cb.pop(msg)) {
     Serial.print("Processing msg id="); Serial.print(msg.messageId);
-    Serial.print(" cmd="); Serial.print((int)msg.command);
+    Serial.print(" cmd="); Serial.print(commandToString(msg.command));
     Serial.print(" param="); Serial.println(msg.param);
     handle_command(msg);
   }
