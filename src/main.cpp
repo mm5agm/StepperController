@@ -94,6 +94,13 @@ constexpr int STEPPER_POSITION_MAX = 16000;
 const unsigned long SEND_INTERVAL_MS = 100;
 unsigned long lastSendTime = 0;
 
+// Limit switch simulation for testing (set to true to enable)
+const bool SIMULATE_LIMIT_SWITCHES = true;
+unsigned long lastSimulationTime = 0;
+const unsigned long SIMULATION_INTERVAL_MS = 1000; // 1 second
+bool simulated_up_limit = false;
+bool simulated_down_limit = false;
+
 // =====================
 // Stepper State Machine
 // =====================
@@ -123,9 +130,61 @@ void sendMessage(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t 
   if (r != ESP_OK) Serial.printf("esp_now_send failed: %d\n", r);
 }
 
-// Limit switches
-bool up_limit_tripped() { return digitalRead(UP_LIMIT_PIN) == LOW; }
-bool down_limit_tripped() { return digitalRead(DOWN_LIMIT_PIN) == LOW; }
+// Limit switches (with optional simulation for testing)
+bool up_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_up_limit;
+  }
+  return digitalRead(UP_LIMIT_PIN) == LOW; 
+}
+
+bool down_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_down_limit;
+  }
+  return digitalRead(DOWN_LIMIT_PIN) == LOW; 
+}
+
+// Simulate limit switch state changes for testing
+void update_limit_simulation() {
+  if (!SIMULATE_LIMIT_SWITCHES) return;
+  
+  unsigned long now = millis();
+  if (now - lastSimulationTime >= SIMULATION_INTERVAL_MS) {
+    // Cycle through different limit switch states
+    static int sim_state = 0;
+    
+    switch (sim_state) {
+      case 0: // Both limits OK
+        simulated_up_limit = false;
+        simulated_down_limit = false;
+        Serial.println("SIMULATION: Both limits OK");
+        break;
+      case 1: // Up limit tripped
+        simulated_up_limit = true;
+        simulated_down_limit = false;
+        Serial.println("SIMULATION: Up limit TRIPPED");
+        break;
+      case 2: // Down limit tripped
+        simulated_up_limit = false;
+        simulated_down_limit = true;
+        Serial.println("SIMULATION: Down limit TRIPPED");
+        break;
+      case 3: // Both limits tripped (unusual but possible)
+        simulated_up_limit = true;
+        simulated_down_limit = true;
+        Serial.println("SIMULATION: Both limits TRIPPED");
+        break;
+    }
+    
+    // Send limit status updates to GUI
+    sendMessage(simulated_up_limit ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    sendMessage(simulated_down_limit ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    
+    sim_state = (sim_state + 1) % 4; // Cycle through 0-3
+    lastSimulationTime = now;
+  }
+}
 
 // Safety check for movement direction
 bool movement_safe(bool direction) {
@@ -345,6 +404,14 @@ void setup()
 
   Serial.println("Setup done");
   
+  // Log simulation status
+  if (SIMULATE_LIMIT_SWITCHES) {
+    Serial.println("*** LIMIT SWITCH SIMULATION ENABLED ***");
+    Serial.println("Switches will change state every 1 second for GUI testing");
+  } else {
+    Serial.println("Using physical limit switches");
+  }
+  
   // Log initial limit switch status
   log_limit_status();
   Serial.print("Initial position: ");
@@ -359,6 +426,9 @@ void setup()
 
 void loop()
 {
+  // Update limit switch simulation for testing
+  update_limit_simulation();
+  
   // Process queued messages
   Message msg;
   while (cb.pop(msg)) {
