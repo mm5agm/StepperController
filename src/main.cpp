@@ -6,6 +6,10 @@
 #include "stepper_commands.h"
 #include "stepper_helpers.h"
 #include "circular_buffer.h"
+#include <Preferences.h>
+
+// Preferences for storing configuration across restarts
+Preferences prefs;
 
 // Replace with your GUI MAC address (update to your GUI device)
 const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
@@ -14,7 +18,7 @@ const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
 CircularBuffer<Message, 16> cb;
 
 // Optional: log helper
-static void printMac(const uint8_t *mac)
+static void print_mac(const uint8_t *mac)
 {
   for (int i = 0; i < 6; ++i) {
     Serial.printf("%02X", mac[i]);
@@ -22,15 +26,23 @@ static void printMac(const uint8_t *mac)
   }
 }
 
+// Forward declarations: some helper functions are defined later in this file
+// but are used earlier (e.g. in log_limit_status / update_limit_simulation).
+// Provide default arguments here so earlier call sites (in this file) can use
+// the two-argument form; the definition below must NOT repeat defaults.
+bool up_limit_tripped();
+bool down_limit_tripped();
+void send_message(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t messageId = 0);
+
 // ESP-NOW receive callback (older Arduino core signature used by PlatformIO)
-void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
+void on_data_recv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 {
   // Note: stepperGUI uses newer signature with esp_now_recv_info_t
   // but PlatformIO uses older signature with direct MAC parameter
   
   Serial.print("onDataRecv called from ");
   if (mac_addr) {
-    printMac(mac_addr);
+    print_mac(mac_addr);
     Serial.println();
   } else {
     Serial.println("(no mac)");
@@ -64,10 +76,10 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 }
 
 // Optional send callback for logging (older signature for PlatformIO compatibility)
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   Serial.print("onDataSent to ");
-  if (mac_addr) printMac(mac_addr);
+  if (mac_addr) print_mac(mac_addr);
   Serial.print(" status=");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
 }
@@ -83,20 +95,25 @@ constexpr int UP_LIMIT_PIN = 23;
 // =====================
 // Timing and Speed
 // =====================
-constexpr long SLOW_PD = 40;
-constexpr long MEDIUM_PD = 20;
-constexpr long FAST_PD = 10;
-long PD = 100;
+// Runtime-configurable pulse delays (microseconds per half-pulse)
+// Initialized to reasonable defaults; these may be overridden by Preferences or commands
+long slow_pd = 40;
+long med_pd = 20;
+long fast_pd = 10;
+// Pulse delay used for move-to operations (separately configurable)
+long moveto_pd = 10;
+
+long pd = 100;
 constexpr int LOOP_DELAY = 5;
 constexpr int STEPPER_POSITION_MIN = 0;
 constexpr int STEPPER_POSITION_MAX = 16000;
 // Throttle for position sends (ms)
 const unsigned long SEND_INTERVAL_MS = 100;
-unsigned long lastSendTime = 0;
+unsigned long last_send_time = 0;
 
 // Limit switch simulation for testing (set to true to enable)
 const bool SIMULATE_LIMIT_SWITCHES = false;
-unsigned long lastSimulationTime = 0;
+unsigned long last_simulation_time = 0;
 const unsigned long SIMULATION_INTERVAL_MS = 1000; // 1 second
 bool simulated_up_limit = false;
 bool simulated_down_limit = false;
@@ -113,36 +130,46 @@ enum StepperState {
   STATE_RESETTING
 };
 StepperState state = STATE_IDLE;
-int moveTarget = 0;
-
+int move_target = 0;
 volatile int position = 0;
-volatile bool Stop = true;
-bool Direction = true; // true = up
+volatile int last_printed_position = 0; // Track last printed position
 
-// Helper to send Message to GUI (uses GUI_MAC defined earlier)
-void sendMessage(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t messageId = 0)
+// Movement primitives
+void single_step(long pulse_delay, bool dir)
 {
-  Message msg;
-  msg.messageId = messageId;
-  msg.command = cmd;
-  msg.param = param;
-  esp_err_t r = esp_now_send(GUI_MAC, (uint8_t *)&msg, sizeof(msg));
-  if (r != ESP_OK) Serial.printf("esp_now_send failed: %d\n", r);
+  digitalWrite(DIR_PIN, dir);
+  digitalWrite(STEP_PIN, HIGH);
+  delayMicroseconds(pulse_delay);
+  digitalWrite(STEP_PIN, LOW);
+  delayMicroseconds(pulse_delay);
+  if (dir) position++;
+  else position--;
+  position = constrain(position, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
+  
+  // Print position to serial when it changes
+  if (position != last_printed_position) {
+    Serial.print("Position: ");
+    Serial.println(position);
+    last_printed_position = position;
+  }
 }
 
-// Limit switches (with optional simulation for testing)
-bool up_limit_tripped() { 
-  if (SIMULATE_LIMIT_SWITCHES) {
-    return simulated_up_limit;
-  }
-  return digitalRead(UP_LIMIT_PIN) == LOW; 
+// Non-blocking stepping state: use micros() to schedule steps so loop() stays responsive
+unsigned long last_step_micros = 0;
+
+// stepPeriodMicros is derived from PD (two pulse halves). We compute it each loop to reflect PD changes.
+static inline unsigned long step_period_from_pd(long pulse_delay) {
+  // single_step uses delayMicroseconds(pulse_delay) twice -> total ~2*pulse_delay
+  unsigned long period = (unsigned long)(2UL * (unsigned long)max(1L, pulse_delay));
+  return period;
 }
 
-bool down_limit_tripped() { 
-  if (SIMULATE_LIMIT_SWITCHES) {
-    return simulated_down_limit;
-  }
-  return digitalRead(DOWN_LIMIT_PIN) == LOW; 
+// Log current limit switch status
+void log_limit_status() {
+  Serial.print("Limit switches: UP=");
+  Serial.print(up_limit_tripped() ? "TRIPPED" : "OK");
+  Serial.print(", DOWN=");
+  Serial.println(down_limit_tripped() ? "TRIPPED" : "OK");
 }
 
 // Simulate limit switch state changes for testing
@@ -150,7 +177,7 @@ void update_limit_simulation() {
   if (!SIMULATE_LIMIT_SWITCHES) return;
   
   unsigned long now = millis();
-  if (now - lastSimulationTime >= SIMULATION_INTERVAL_MS) {
+  if (now - last_simulation_time >= SIMULATION_INTERVAL_MS) {
     // Cycle through different limit switch states
     static int sim_state = 0;
     
@@ -178,58 +205,44 @@ void update_limit_simulation() {
     }
     
     // Send limit status updates to GUI
-    sendMessage(simulated_up_limit ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
-    sendMessage(simulated_down_limit ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    send_message(simulated_up_limit ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    send_message(simulated_down_limit ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
     
     sim_state = (sim_state + 1) % 4; // Cycle through 0-3
-    lastSimulationTime = now;
+    last_simulation_time = now;
   }
 }
+volatile bool stop_flag = true;
+bool direction = true; // true = up
 
-// Safety check for movement direction
-bool movement_safe(bool direction) {
-  if (direction && up_limit_tripped()) {
-    return false; // Can't move up - up limit tripped
-  }
-  if (!direction && down_limit_tripped()) {
-    return false; // Can't move down - down limit tripped
-  }
-  return true; // Movement is safe
-}
-
-// Log current limit switch status
-void log_limit_status() {
-  Serial.print("Limit switches: UP=");
-  Serial.print(up_limit_tripped() ? "TRIPPED" : "OK");
-  Serial.print(", DOWN=");
-  Serial.println(down_limit_tripped() ? "TRIPPED" : "OK");
-}
-
-// Movement primitives
-void single_step(long pulseDelay, bool dir)
+// Helper to send Message to GUI (uses GUI_MAC defined earlier)
+void send_message(CommandType cmd, int32_t param, uint8_t messageId)
 {
-  digitalWrite(DIR_PIN, dir);
-  digitalWrite(STEP_PIN, HIGH);
-  delayMicroseconds(pulseDelay);
-  digitalWrite(STEP_PIN, LOW);
-  delayMicroseconds(pulseDelay);
-  if (dir) position++;
-  else position--;
-  position = constrain(position, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
+  Message msg;
+  msg.messageId = messageId;
+  msg.command = cmd;
+  msg.param = param;
+  esp_err_t r = esp_now_send(GUI_MAC, (uint8_t *)&msg, sizeof(msg));
+  if (r != ESP_OK) Serial.printf("esp_now_send failed: %d\n", r);
 }
 
-// Non-blocking stepping state: use micros() to schedule steps so loop() stays responsive
-unsigned long lastStepMicros = 0;
+// Limit switches (with optional simulation for testing)
+bool up_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_up_limit;
+  }
+  return digitalRead(UP_LIMIT_PIN) == LOW; 
+}
 
-// stepPeriodMicros is derived from PD (two pulse halves). We compute it each loop to reflect PD changes.
-static inline unsigned long stepPeriodFromPD(long pulseDelay) {
-  // single_step uses delayMicroseconds(pulseDelay) twice -> total ~2*pulseDelay
-  unsigned long period = (unsigned long)(2UL * (unsigned long)max(1L, pulseDelay));
-  return period;
+bool down_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_down_limit;
+  }
+  return digitalRead(DOWN_LIMIT_PIN) == LOW; 
 }
 
 // Initialize moveTo operation (called once when CMD_MOVE_TO is received)
-void startMoveTo(int pos) {
+void start_move_to(int pos) {
   int difference = pos - position;
   
   Serial.print("Position = "); Serial.print(position); 
@@ -239,21 +252,21 @@ void startMoveTo(int pos) {
   if (difference == 0) {
     // Already at target position
     Serial.println("Already at target position");
-    Stop = true;
+    stop_flag = true;
     state = STATE_IDLE;
-    sendMessage(CMD_POSITION, position);
+    send_message(CMD_POSITION, position);
   } else if (difference > 0) {
     // Need to move up
     Serial.println(" case 1 - will move up");
-    moveTarget = pos;
+    move_target = pos;
     state = STATE_MOVING_TO;
-    Stop = false;
+    stop_flag = false;
   } else {
     // Need to move down  
     Serial.println(" case -1 - will move down");
-    moveTarget = pos;
+    move_target = pos;
     state = STATE_MOVING_TO;
-    Stop = false;
+    stop_flag = false;
   }
 }
 
@@ -262,101 +275,128 @@ void handle_command(const Message &msg)
 {
   switch (msg.command) {
     case CMD_STOP:
-      Stop = true;
+      stop_flag = true;
       state = STATE_IDLE;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       break;
     case CMD_UP_SLOW:
       if (up_limit_tripped()) {
         Serial.println("UP movement blocked - up limit switch tripped");
-        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = SLOW_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        pd = slow_pd; direction = true; stop_flag = false; state = STATE_MOVING_UP;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_UP_MEDIUM:
       if (up_limit_tripped()) {
         Serial.println("UP movement blocked - up limit switch tripped");
-        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = MEDIUM_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        pd = med_pd; direction = true; stop_flag = false; state = STATE_MOVING_UP;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_UP_FAST:
       if (up_limit_tripped()) {
         Serial.println("UP movement blocked - up limit switch tripped");
-        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = FAST_PD; Direction = true; Stop = false; state = STATE_MOVING_UP;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        pd = fast_pd; direction = true; stop_flag = false; state = STATE_MOVING_UP;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_DOWN_SLOW:
       if (down_limit_tripped()) {
         Serial.println("DOWN movement blocked - down limit switch tripped");
-        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = SLOW_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        pd = slow_pd; direction = false; stop_flag = false; state = STATE_MOVING_DOWN;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_DOWN_MEDIUM:
       if (down_limit_tripped()) {
         Serial.println("DOWN movement blocked - down limit switch tripped");
-        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = MEDIUM_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+          pd = med_pd; direction = false; stop_flag = false; state = STATE_MOVING_DOWN;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_DOWN_FAST:
       if (down_limit_tripped()) {
         Serial.println("DOWN movement blocked - down limit switch tripped");
-        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = FAST_PD; Direction = false; Stop = false; state = STATE_MOVING_DOWN;
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        pd = fast_pd; direction = false; stop_flag = false; state = STATE_MOVING_DOWN;
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       }
       break;
     case CMD_MOVE_TO:
-      moveTarget = constrain((int)msg.param, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
+      move_target = constrain((int)msg.param, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
       
       // Check if movement direction would hit a limit switch
-      if (moveTarget > position && up_limit_tripped()) {
+      if (move_target > position && up_limit_tripped()) {
         Serial.println("MOVE_TO blocked - target requires UP movement but up limit tripped");
-        sendMessage(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
-      } else if (moveTarget < position && down_limit_tripped()) {
+        send_message(CMD_UP_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+      } else if (move_target < position && down_limit_tripped()) {
         Serial.println("MOVE_TO blocked - target requires DOWN movement but down limit tripped");
-        sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
+        send_message(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED, msg.messageId);
       } else {
-        PD = FAST_PD; // Use fast speed for move to operations
-        sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
-        startMoveTo(moveTarget); // Initialize non-blocking moveTo operation
+        pd = moveto_pd; // Use configured move-to pulse delay for move to operations
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        start_move_to(move_target); // Initialize non-blocking moveTo operation
       }
       break;
+
+      // Commands to update pulse delays at runtime
+      case CMD_SLOW_SPEED_PULSE_DELAY:
+        slow_pd = max(1, (int)msg.param);
+        prefs.putLong("slow_pd", slow_pd);
+        Serial.print("Updated slow_pd to "); Serial.println(slow_pd);
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        break;
+      case CMD_MEDIUM_SPEED_PULSE_DELAY:
+          med_pd = max(1, (int)msg.param);
+          prefs.putLong("med_pd", med_pd);
+          Serial.print("Updated med_pd to "); Serial.println(med_pd);
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        break;
+      case CMD_FAST_SPEED_PULSE_DELAY:
+        fast_pd = max(1, (int)msg.param);
+        prefs.putLong("fast_pd", fast_pd);
+        Serial.print("Updated fast_pd to "); Serial.println(fast_pd);
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        break;
+      case CMD_MOVE_TO_PULSE_DELAY:
+        moveto_pd = max(1, (int)msg.param);
+        prefs.putLong("moveto_pd", moveto_pd);
+        Serial.print("Updated moveto_pd to "); Serial.println(moveto_pd);
+        send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+        break;
     case CMD_MOVE_TO_DOWN_LIMIT:
-      Stop = false; state = STATE_MOVE_TO_DOWN_LIMIT;
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      stop_flag = false; state = STATE_MOVE_TO_DOWN_LIMIT;
+      send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       break;
     case CMD_DOWN_LIMIT_STATUS:
-      sendMessage(down_limit_tripped() ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED, msg.messageId);
+      send_message(down_limit_tripped() ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED, msg.messageId);
       break;
     case CMD_REQUEST_DOWN_STOP:
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       break;
     case CMD_GET_POSITION:
-      sendMessage(CMD_GET_POSITION, position, msg.messageId);
+      send_message(CMD_GET_POSITION, position, msg.messageId);
       break;
     case CMD_RESET:
-      Stop = true; 
+      stop_flag = true; 
       state = STATE_RESETTING; 
-      sendMessage(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+      send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
       Serial.println("Reset command received - restarting controller...");
       delay(100); // Brief delay to ensure ACK is sent
       ESP.restart();
       break;
+      
     default:
       // Unknown command
       break;
@@ -390,8 +430,8 @@ void setup()
   pinMode(UP_LIMIT_PIN, INPUT_PULLUP);
 
   // Register callbacks (old-style signatures expected by this core)
-  esp_now_register_recv_cb(onDataRecv);
-  esp_now_register_send_cb(onDataSent);
+  esp_now_register_recv_cb(on_data_recv);
+  esp_now_register_send_cb(on_data_sent);
 
   // Add GUI as peer (optional but helpful)
   esp_now_peer_info_t peer = {};
@@ -417,10 +457,44 @@ void setup()
   Serial.print("Initial position: ");
   Serial.println(position);
   
+  // Load persisted pulse delay settings (if present)
+  prefs.begin("stepper", false); // namespace "stepper"
+  // Migration: prefer new short/stable keys (slow_pd, med_pd, fast_pd, moveto_pd)
+  // If new key not present, fallback to old keys (slowPD, mediumPD, fastPD, moveToPD)
+  long tmp;
+  tmp = prefs.getLong("slow_pd", 0);
+  if (tmp != 0) slow_pd = tmp;
+  else {
+    tmp = prefs.getLong("slowPD", 0);
+    if (tmp != 0) { prefs.putLong("slow_pd", tmp); slow_pd = tmp; }
+  }
+  tmp = prefs.getLong("med_pd", 0);
+  if (tmp != 0) med_pd = tmp;
+  else {
+    tmp = prefs.getLong("mediumPD", 0);
+    if (tmp != 0) { prefs.putLong("med_pd", tmp); med_pd = tmp; }
+  }
+  tmp = prefs.getLong("fast_pd", 0);
+  if (tmp != 0) fast_pd = tmp;
+  else {
+    tmp = prefs.getLong("fastPD", 0);
+    if (tmp != 0) { prefs.putLong("fast_pd", tmp); fast_pd = tmp; }
+  }
+  tmp = prefs.getLong("moveto_pd", 0);
+  if (tmp != 0) moveto_pd = tmp;
+  else {
+    tmp = prefs.getLong("moveToPD", 0);
+    if (tmp != 0) { prefs.putLong("moveto_pd", tmp); moveto_pd = tmp; }
+  }
+  Serial.print("Loaded pulse delays: slow="); Serial.print(slow_pd);
+  Serial.print(", medium="); Serial.print(med_pd);
+  Serial.print(", fast="); Serial.print(fast_pd);
+  Serial.print(", moveto="); Serial.println(moveto_pd);
+  
   // Send reset command to GUI after controller startup
   delay(2000); // Wait for system to stabilize and GUI to be ready
   Serial.println("Sending reset command to GUI...");
-  sendMessage(CMD_RESET, STEPPER_PARAM_UNUSED, 0);
+  send_message(CMD_RESET, STEPPER_PARAM_UNUSED, 0);
   delay(500); // Give time for message to be sent
 }
 
@@ -439,77 +513,77 @@ void loop()
   }
 
   // Non-blocking state machine stepping
-  unsigned long nowMicros = micros();
-  unsigned long stepPeriod = stepPeriodFromPD(PD);
+  unsigned long now_micros = micros();
+  unsigned long step_period = step_period_from_pd(pd);
 
   switch (state) {
     case STATE_MOVING_UP:
-      if (Stop || up_limit_tripped()) {
-        Stop = true;
+      if (stop_flag || up_limit_tripped()) {
+        stop_flag = true;
         state = STATE_IDLE;
-        sendMessage(up_limit_tripped() ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
+        send_message(up_limit_tripped() ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
         break;
       }
-      if (nowMicros - lastStepMicros >= stepPeriod) {
-        single_step(PD, true);
-        lastStepMicros = nowMicros;
-        if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
-          sendMessage(CMD_POSITION, position);
-          lastSendTime = millis();
+      if (now_micros - last_step_micros >= step_period) {
+        single_step(pd, true);
+        last_step_micros = now_micros;
+        if (millis() - last_send_time >= SEND_INTERVAL_MS) {
+          send_message(CMD_POSITION, position);
+          last_send_time = millis();
         }
       }
       break;
 
     case STATE_MOVING_DOWN:
-      if (Stop || down_limit_tripped()) {
-        Stop = true;
+      if (stop_flag || down_limit_tripped()) {
+        stop_flag = true;
         state = STATE_IDLE;
-        sendMessage(down_limit_tripped() ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
+        send_message(down_limit_tripped() ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
         break;
       }
-      if (nowMicros - lastStepMicros >= stepPeriod) {
-        single_step(PD, false);
-        lastStepMicros = nowMicros;
-        if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
-          sendMessage(CMD_POSITION, position);
-          lastSendTime = millis();
+      if (now_micros - last_step_micros >= step_period) {
+        single_step(pd, false);
+        last_step_micros = now_micros;
+        if (millis() - last_send_time >= SEND_INTERVAL_MS) {
+          send_message(CMD_POSITION, position);
+          last_send_time = millis();
         }
       }
       break;
 
     case STATE_MOVING_TO:
-      if (Stop || up_limit_tripped() || down_limit_tripped()) {
-        Stop = true; state = STATE_IDLE; sendMessage(CMD_POSITION, position);
+      if (stop_flag || up_limit_tripped() || down_limit_tripped()) {
+        stop_flag = true; state = STATE_IDLE; send_message(CMD_POSITION, position);
         break;
       }
-      if (position == moveTarget) {
-        Stop = true; state = STATE_IDLE; 
-        sendMessage(CMD_POSITION, position);
+      if (position == move_target) {
+        stop_flag = true; state = STATE_IDLE; 
+        send_message(CMD_POSITION, position);
         Serial.print("Move To completed. Final position = "); Serial.println(position);
         break;
       }
-      if (nowMicros - lastStepMicros >= stepPeriod) {
-        bool dir = (moveTarget > position);
-        single_step(PD, dir);
-        lastStepMicros = nowMicros;
-        if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
-          sendMessage(CMD_POSITION, position);
-          lastSendTime = millis();
+      if (now_micros - last_step_micros >= step_period) {
+        bool dir = (move_target > position);
+        single_step(pd, dir);
+        last_step_micros = now_micros;
+        if (millis() - last_send_time >= SEND_INTERVAL_MS) {
+          send_message(CMD_POSITION, position);
+          last_send_time = millis();
         }
       }
       break;
 
     case STATE_MOVE_TO_DOWN_LIMIT:
-      if (Stop || down_limit_tripped()) {
-        Stop = true; state = STATE_IDLE; position = STEPPER_POSITION_MIN; sendMessage(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED);
+      if (stop_flag || down_limit_tripped()) {
+        stop_flag = true; state = STATE_IDLE; position = STEPPER_POSITION_MIN; send_message(CMD_DOWN_LIMIT_TRIP, STEPPER_PARAM_UNUSED);
         break;
       }
-      if (nowMicros - lastStepMicros >= stepPeriod) {
-        single_step(PD, false);
-        lastStepMicros = nowMicros;
-        if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
-          sendMessage(CMD_POSITION, position);
-          lastSendTime = millis();
+      if (now_micros - last_step_micros >= step_period) {
+        single_step(pd, false);
+        last_step_micros = now_micros;
+        if (millis() - last_send_time >= SEND_INTERVAL_MS) {
+          send_message(CMD_POSITION, position);
+          last_send_time = millis();
         }
       }
       break;
@@ -524,3 +598,5 @@ void loop()
   // Small yield to avoid busy loop
   delay(1);
 }
+
+// (forward declarations moved earlier in the file)

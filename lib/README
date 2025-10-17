@@ -11,36 +11,44 @@ For example, see the structure of the following example libraries `Foo` and `Bar
 |  |
 |  |--Bar
 |  |  |--docs
-|  |  |--examples
-|  |  |--src
-|  |     |- Bar.c
-|  |     |- Bar.h
-|  |  |- library.json (optional. for custom build options, etc) https://docs.platformio.org/page/librarymanager/config.html
-|  |
-|  |--Foo
-|  |  |- Foo.c
-|  |  |- Foo.h
-|  |
-|  |- README --> THIS FILE
-|
-|- platformio.ini
-|--src
-   |- main.c
+# Project `lib` directory
 
-Example contents of `src/main.c` using Foo and Bar:
+This directory is intended for project-specific libraries used by this firmware.
+PlatformIO will compile each library found under `lib/` into a static library and link it into the final executable.
+
+Each library should live in its own subdirectory, e.g. `lib/Foo/` and `lib/Bar/`.
+
+Example layout:
+
 ```
+lib/
+  ├─ Foo/
+  │   ├─ src/
+  │   │   └─ Foo.h
+  │   │   └─ Foo.cpp
+  │   └─ library.json  # optional
+  └─ Bar/
+      ├─ src/
+      │   └─ Bar.h
+      │   └─ Bar.cpp
+      └─ docs/
+
+src/
+  └─ main.cpp
+platformio.ini
+```
+
+Example usage in `src/main.cpp`:
+
+```cpp
 #include <Foo.h>
 #include <Bar.h>
 
-int main (void)
-{
-  ...
+int main() {
+  // ...
 }
-
 ```
 
-The PlatformIO Library Dependency Finder will find automatically dependent
-libraries by scanning project source files.
+PlatformIO's Library Dependency Finder (LDF) automatically discovers and links libraries referenced by your source files. See:
 
-More information about PlatformIO Library Dependency Finder
 - https://docs.platformio.org/page/librarymanager/ldf.html
