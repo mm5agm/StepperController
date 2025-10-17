@@ -61,130 +61,70 @@ typedef struct __attribute__((packed)) {
 
 ## 🛠 Build and Upload
 
-### Prerequisites
-- PlatformIO IDE or VS Code with PlatformIO extension
-- ESP32 board support
+Quick start (PowerShell)
 
-### Build Commands
-```bash
-# Build project
+```powershell
+# Build the project
 platformio run
 
-# Upload to ESP32
-platformio run --target upload
+# Upload to the esp32doit-devkit-v1 environment (replace COM3 with your port)
+platformio run -e esp32doit-devkit-v1 --target upload --upload-port COM3
 
-# Monitor serial output
-platformio device monitor
+# Open the serial monitor at 115200 baud
+platformio device monitor --baud 115200
 ```
 
-## 📁 Project Structure
+## Project layout
 
 ```
-StepperController/
-├── src/
-│   └── main.cpp              # Main controller logic
-├── MagLoop_Common_Files/     # Shared headers (Git submodule)
-│   ├── stepper_commands.h    # Command definitions
-│   ├── stepper_helpers.h     # Helper functions
-│   └── circular_buffer.h     # Message queue implementation
-├── snippets/
-│   └── StepperGUI_missing_functions.txt  # GUI helper code
-├── update-common.bat         # Windows submodule update script
-├── update-submodules.ps1     # PowerShell update script
-├── update-common.sh          # Bash update script
-└── platformio.ini           # PlatformIO configuration
+.
+├─ src/
+│  └─ main.cpp
+├─ MagLoop_Common_Files/   # Git submodule with shared headers
+├─ lib/
+├─ platformio.ini
+├─ download_latest_all.bat
+└─ upload_changes_all.bat
 ```
 
-## 🔗 Related Projects
+## Configuration
 
-- **[StepperGUI](https://github.com/mm5agm/StepperGUI)** - Touchscreen GUI controller
-- **[MagLoop_Common_Files](https://github.com/mm5agm/MagLoop_Common_Files)** - Shared header files
+Pulse delays and limits are declared in `src/main.cpp`. The runtime PD values are persisted using the ESP32 Preferences API under the `stepper` namespace.
 
-## ⚙️ Configuration
+Update the GUI MAC address in `src/main.cpp` if needed:
 
-### Motor Settings
-Adjust these constants in `main.cpp`:
-```cpp
-constexpr long SLOW_PD = 40;    // Slow speed pulse delay (microseconds)
-constexpr long MEDIUM_PD = 20;  // Medium speed pulse delay
-constexpr long FAST_PD = 10;    // Fast speed pulse delay
-```
-
-### Position Limits
-```cpp
-constexpr int STEPPER_POSITION_MIN = 0;      // Minimum position
-constexpr int STEPPER_POSITION_MAX = 16000;  // Maximum position
-```
-
-### ESP-NOW Configuration
-Update the GUI MAC address in `main.cpp`:
 ```cpp
 const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
 ```
 
-## 🔄 Updating Shared Files
+## Updating shared files
 
-This project uses Git submodules for shared header files. When changes are made to common files:
+Run the included batch scripts to synchronize shared files and GUI code:
 
-### Quick Update (Recommended)
-```bash
-# Windows
-update-common.bat
-
-# PowerShell
-.\update-submodules.ps1
-
-# Cross-platform
-./update-common.sh
+```bat
+download_latest_all.bat
+upload_changes_all.bat
 ```
 
-### Git Aliases
-```bash
-git sync-common    # Update, commit, and push
-git update-subs    # Update only
-```
+## State machine
 
-## 📊 State Machine
+States include `STATE_IDLE`, `STATE_MOVING_UP`, `STATE_MOVING_DOWN`, `STATE_MOVING_TO`, `STATE_MOVE_TO_DOWN_LIMIT`, and `STATE_RESETTING`.
 
-The controller operates using a non-blocking state machine:
+## Troubleshooting
 
-| State | Description |
-|-------|-------------|
-| `STATE_IDLE` | Waiting for commands |
-| `STATE_MOVING_UP` | Moving upward continuously |
-| `STATE_MOVING_DOWN` | Moving downward continuously |
-| `STATE_MOVING_TO` | Moving to specific position |
-| `STATE_MOVE_TO_DOWN_LIMIT` | Moving to down limit switch |
-| `STATE_RESETTING` | System reset in progress |
+- ESP-NOW issues: verify MAC addresses and peer configuration
+- Motor not moving: check wiring, DM542 enable/config and power
+- Limit switches: confirm INPUT_PULLUP wiring and logic
 
-## 🔍 Debugging
+## Contributing
 
-### Serial Monitor Output
-- ESP-NOW message reception/transmission
-- Command processing
-- Position updates
-- Limit switch status
-- Error messages
-
-### Common Issues
-1. **ESP-NOW communication fails**: Check MAC addresses match
-2. **Motor doesn't move**: Verify DM542 wiring and power
-3. **Limit switches not working**: Check INPUT_PULLUP configuration
-4. **Build errors**: Ensure submodules are updated (`git sync-common`)
-
-## 📄 License
-
-This project is part of the MagLoop stepper control system.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Update shared files in MagLoop_Common_Files if needed
-5. Test with both controller and GUI
-6. Submit a pull request
+1. Fork
+2. Create branch
+3. Make changes
+4. Update `MagLoop_Common_Files` if shared definitions change
+5. Test controller + GUI
+6. Submit PR
 
 ---
 
-*For GUI interface, see [StepperGUI](https://github.com/mm5agm/StepperGUI)*
+See also: StepperGUI (GUI project) and MagLoop_Common_Files (shared headers)
