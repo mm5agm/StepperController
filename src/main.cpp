@@ -6,9 +6,11 @@
 #include "stepper_commands.h"
 #include "stepper_helpers.h"
 #include "circular_buffer.h"
+#include <Preferences.h>
 #include "fsm/fsm.h"
 #include "commandToString.h"
 #include "send_message_bridge.h"
+Preferences prefs;
 StepperContext fsm_ctx;
 // Replace with your GUI MAC address (update to your GUI device)
 const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
@@ -17,7 +19,7 @@ const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
 CircularBuffer<Message, 16> cb;
 
 // Optional: log helper
-static void printMac(const uint8_t *mac)
+static void print_mac(const uint8_t *mac)
 {
   for (int i = 0; i < 6; ++i) {
     Serial.printf("%02X", mac[i]);
@@ -25,15 +27,23 @@ static void printMac(const uint8_t *mac)
   }
 }
 
+// Forward declarations: some helper functions are defined later in this file
+// but are used earlier (e.g. in log_limit_status / update_limit_simulation).
+// Provide default arguments here so earlier call sites (in this file) can use
+// the two-argument form; the definition below must NOT repeat defaults.
+bool up_limit_tripped();
+bool down_limit_tripped();
+void send_message(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t messageId = 0);
+
 // ESP-NOW receive callback (older Arduino core signature used by PlatformIO)
-void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
+void on_data_recv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 {
   // Note: stepperGUI uses newer signature with esp_now_recv_info_t
   // but PlatformIO uses older signature with direct MAC parameter
   
-  Serial.print("onDataRecv called from ");
+  Serial.print("[RECEIVED] from ");
   if (mac_addr) {
-    printMac(mac_addr);
+    print_mac(mac_addr);
     Serial.println();
   } else {
     Serial.println("(no mac)");
@@ -47,8 +57,8 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   Message msg;
   memcpy(&msg, incomingData, sizeof(msg));
 
-  Serial.print("MessageId: "); Serial.print(msg.messageId);
-  Serial.print(" cmd="); Serial.print((int)msg.command);
+  Serial.print("[RECEIVED CMD] id="); Serial.print(msg.messageId);
+  Serial.print(" cmd="); Serial.print(commandToString(msg.command));
   Serial.print(" param="); Serial.println(msg.param);
 
   // Enqueue for processing in loop()
@@ -61,16 +71,19 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   ack.messageId = msg.messageId;
   ack.command = CMD_ACK;
   ack.param = 0;
+  Serial.print("[SENT CMD] ACK to sender: id="); Serial.print(ack.messageId);
+  Serial.print(" cmd="); Serial.print(commandToString(ack.command));
+  Serial.print(" param="); Serial.println(ack.param);
   esp_err_t r = esp_now_send(mac_addr, (uint8_t *)&ack, sizeof(ack));
   if (r == ESP_OK) Serial.println("ACK sent");
   else Serial.printf("ACK send failed: %d\n", r);
 }
 
 // Optional send callback for logging (older signature for PlatformIO compatibility)
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   Serial.print("onDataSent to ");
-  if (mac_addr) printMac(mac_addr);
+  if (mac_addr) print_mac(mac_addr);
   Serial.print(" status=");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
 }
@@ -86,6 +99,7 @@ constexpr int UP_LIMIT_PIN = 23;
 // =====================
 // Timing and Speed
 // =====================
+<<<<<<< HEAD
 constexpr long SLOW_PD = 40;
 constexpr long MEDIUM_PD = 20;
 constexpr long FAST_PD = 10;
@@ -94,45 +108,78 @@ long med_pd = MEDIUM_PD;
 long fast_pd = FAST_PD;
 long moveto_pd = FAST_PD;
 long PD = 100;
+=======
+// Runtime-configurable pulse delays (microseconds per half-pulse)
+// Initialized to reasonable defaults; these may be overridden by Preferences or commands
+long slow_pd = 40;
+long med_pd = 20;
+long fast_pd = 10;
+// Pulse delay used for move-to operations (separately configurable)
+long moveto_pd = 10;
+
+long pd = 100;
+>>>>>>> docs/nvs-migration
 constexpr int LOOP_DELAY = 5;
 extern const int STEPPER_POSITION_MIN = 0;
 extern const int STEPPER_POSITION_MAX = 16000;
 // Throttle for position sends (ms)
 const unsigned long SEND_INTERVAL_MS = 100;
-unsigned long lastSendTime = 0;
+unsigned long last_send_time = 0;
 
 // Limit switch simulation for testing (set to true to enable)
 const bool SIMULATE_LIMIT_SWITCHES = false;
-unsigned long lastSimulationTime = 0;
+unsigned long last_simulation_time = 0;
 const unsigned long SIMULATION_INTERVAL_MS = 1000; // 1 second
 bool simulated_up_limit = false;
 bool simulated_down_limit = false;
 
+<<<<<<< HEAD
 
 // Helper to send Message to GUI (uses GUI_MAC defined earlier)
 void sendMessage(CommandType cmd, int32_t param = STEPPER_PARAM_UNUSED, uint8_t messageId = 0)
+=======
+// =====================
+// FSM Context
+// =====================
+StepperContext fsm_ctx;
+volatile int last_printed_position = 0; // Track last printed position
+
+// Movement primitives
+void single_step(long pulse_delay, bool dir)
+>>>>>>> docs/nvs-migration
 {
-  Message msg;
-  msg.messageId = messageId;
-  msg.command = cmd;
-  msg.param = param;
-  esp_err_t r = esp_now_send(GUI_MAC, (uint8_t *)&msg, sizeof(msg));
-  if (r != ESP_OK) Serial.printf("esp_now_send failed: %d\n", r);
+  digitalWrite(DIR_PIN, dir);
+  digitalWrite(STEP_PIN, HIGH);
+  delayMicroseconds(pulse_delay);
+  digitalWrite(STEP_PIN, LOW);
+  delayMicroseconds(pulse_delay);
+  if (dir) fsm_ctx.position++;
+  else fsm_ctx.position--;
+  fsm_ctx.position = constrain(fsm_ctx.position, STEPPER_POSITION_MIN, STEPPER_POSITION_MAX);
+  // Print position to serial when it changes
+  if (fsm_ctx.position != last_printed_position) {
+    Serial.print("Position: ");
+    Serial.println(fsm_ctx.position);
+    last_printed_position = fsm_ctx.position;
+  }
 }
 
-// Limit switches (with optional simulation for testing)
-bool up_limit_tripped() { 
-  if (SIMULATE_LIMIT_SWITCHES) {
-    return simulated_up_limit;
-  }
-  return digitalRead(UP_LIMIT_PIN) == LOW; 
+// Non-blocking stepping state: use micros() to schedule steps so loop() stays responsive
+unsigned long last_step_micros = 0;
+
+// stepPeriodMicros is derived from PD (two pulse halves). We compute it each loop to reflect PD changes.
+static inline unsigned long step_period_from_pd(long pulse_delay) {
+  // single_step uses delayMicroseconds(pulse_delay) twice -> total ~2*pulse_delay
+  unsigned long period = (unsigned long)(2UL * (unsigned long)max(1L, pulse_delay));
+  return period;
 }
 
-bool down_limit_tripped() { 
-  if (SIMULATE_LIMIT_SWITCHES) {
-    return simulated_down_limit;
-  }
-  return digitalRead(DOWN_LIMIT_PIN) == LOW; 
+// Log current limit switch status
+void log_limit_status() {
+  Serial.print("Limit switches: UP=");
+  Serial.print(up_limit_tripped() ? "TRIPPED" : "OK");
+  Serial.print(", DOWN=");
+  Serial.println(down_limit_tripped() ? "TRIPPED" : "OK");
 }
 
 // Simulate limit switch state changes for testing
@@ -140,7 +187,7 @@ void update_limit_simulation() {
   if (!SIMULATE_LIMIT_SWITCHES) return;
   
   unsigned long now = millis();
-  if (now - lastSimulationTime >= SIMULATION_INTERVAL_MS) {
+  if (now - last_simulation_time >= SIMULATION_INTERVAL_MS) {
     // Cycle through different limit switch states
     static int sim_state = 0;
     
@@ -168,36 +215,20 @@ void update_limit_simulation() {
     }
     
     // Send limit status updates to GUI
-    sendMessage(simulated_up_limit ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
-    sendMessage(simulated_down_limit ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    send_message(simulated_up_limit ? CMD_UP_LIMIT_TRIP : CMD_UP_LIMIT_OK, STEPPER_PARAM_UNUSED);
+    send_message(simulated_down_limit ? CMD_DOWN_LIMIT_TRIP : CMD_DOWN_LIMIT_OK, STEPPER_PARAM_UNUSED);
     
     sim_state = (sim_state + 1) % 4; // Cycle through 0-3
-    lastSimulationTime = now;
+    last_simulation_time = now;
   }
 }
+volatile bool stop_flag = true;
+bool direction = true; // true = up
 
-// Safety check for movement direction
-bool movement_safe(bool direction) {
-  if (direction && up_limit_tripped()) {
-    return false; // Can't move up - up limit tripped
-  }
-  if (!direction && down_limit_tripped()) {
-    return false; // Can't move down - down limit tripped
-  }
-  return true; // Movement is safe
-}
-
-// Log current limit switch status
-void log_limit_status() {
-  Serial.print("Limit switches: UP=");
-  Serial.print(up_limit_tripped() ? "TRIPPED" : "OK");
-  Serial.print(", DOWN=");
-  Serial.println(down_limit_tripped() ? "TRIPPED" : "OK");
-}
-
-// Movement primitives
-void single_step(long pulseDelay, bool dir)
+// Helper to send Message to GUI (uses GUI_MAC defined earlier)
+void send_message(CommandType cmd, int32_t param, uint8_t messageId)
 {
+<<<<<<< HEAD
   digitalWrite(DIR_PIN, dir);
   digitalWrite(STEP_PIN, HIGH);
   delayMicroseconds(pulseDelay);
@@ -220,6 +251,38 @@ static inline unsigned long stepPeriodFromPD(long pulseDelay) {
   return period;
 }
 
+=======
+  Message msg;
+  msg.messageId = messageId;
+  msg.command = cmd;
+  msg.param = param;
+  Serial.print("[SENT CMD] to GUI: id="); Serial.print(msg.messageId);
+  Serial.print(" cmd="); Serial.print(commandToString(msg.command));
+  Serial.print(" param="); Serial.println(msg.param);
+  esp_err_t r = esp_now_send(GUI_MAC, (uint8_t *)&msg, sizeof(msg));
+  if (r != ESP_OK) Serial.printf("esp_now_send failed: %d\n", r);
+}
+
+// Limit switches (with optional simulation for testing)
+bool up_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_up_limit;
+  }
+  return digitalRead(UP_LIMIT_PIN) == LOW; 
+}
+
+bool down_limit_tripped() { 
+  if (SIMULATE_LIMIT_SWITCHES) {
+    return simulated_down_limit;
+  }
+  return digitalRead(DOWN_LIMIT_PIN) == LOW; 
+}
+
+// Move-to logic now handled in FSM
+
+// Command handler now handled in FSM
+
+>>>>>>> docs/nvs-migration
 void setup()
 {
   Serial.begin(115200);
@@ -247,8 +310,8 @@ void setup()
   pinMode(UP_LIMIT_PIN, INPUT_PULLUP);
 
   // Register callbacks (old-style signatures expected by this core)
-  esp_now_register_recv_cb(onDataRecv);
-  esp_now_register_send_cb(onDataSent);
+  esp_now_register_recv_cb(on_data_recv);
+  esp_now_register_send_cb(on_data_sent);
 
   // Add GUI as peer (optional but helpful)
   esp_now_peer_info_t peer = {};
@@ -271,13 +334,53 @@ void setup()
   
   // Log initial limit switch status
   log_limit_status();
+<<<<<<< HEAD
   fsm_init(&fsm_ctx);
 Serial.print("Initial position: ");
 Serial.println(fsm_ctx.position);
+=======
+  Serial.print("Initial position: ");
+  Serial.println(fsm_ctx.position);
+  
+  // Load persisted pulse delay settings (if present)
+  prefs.begin("stepper", false); // namespace "stepper"
+  // Migration: prefer new short/stable keys (slow_pd, med_pd, fast_pd, moveto_pd)
+  // If new key not present, fallback to old keys (slowPD, mediumPD, fastPD, moveToPD)
+  long tmp;
+  tmp = prefs.getLong("slow_pd", 0);
+  if (tmp != 0) slow_pd = tmp;
+  else {
+    tmp = prefs.getLong("slowPD", 0);
+    if (tmp != 0) { prefs.putLong("slow_pd", tmp); slow_pd = tmp; }
+  }
+  tmp = prefs.getLong("med_pd", 0);
+  if (tmp != 0) med_pd = tmp;
+  else {
+    tmp = prefs.getLong("mediumPD", 0);
+    if (tmp != 0) { prefs.putLong("med_pd", tmp); med_pd = tmp; }
+  }
+  tmp = prefs.getLong("fast_pd", 0);
+  if (tmp != 0) fast_pd = tmp;
+  else {
+    tmp = prefs.getLong("fastPD", 0);
+    if (tmp != 0) { prefs.putLong("fast_pd", tmp); fast_pd = tmp; }
+  }
+  tmp = prefs.getLong("moveto_pd", 0);
+  if (tmp != 0) moveto_pd = tmp;
+  else {
+    tmp = prefs.getLong("moveToPD", 0);
+    if (tmp != 0) { prefs.putLong("moveto_pd", tmp); moveto_pd = tmp; }
+  }
+  Serial.print("Loaded pulse delays: slow="); Serial.print(slow_pd);
+  Serial.print(", medium="); Serial.print(med_pd);
+  Serial.print(", fast="); Serial.print(fast_pd);
+  Serial.print(", moveto="); Serial.println(moveto_pd);
+  
+>>>>>>> docs/nvs-migration
   // Send reset command to GUI after controller startup
   delay(2000); // Wait for system to stabilize and GUI to be ready
   Serial.println("Sending reset command to GUI...");
-  sendMessage(CMD_RESET, STEPPER_PARAM_UNUSED, 0);
+  send_message(CMD_RESET, STEPPER_PARAM_UNUSED, 0);
   delay(500); // Give time for message to be sent
 }
 
@@ -286,6 +389,7 @@ void loop()
   // Update limit switch simulation for testing
   update_limit_simulation();
   Message msg;
+<<<<<<< HEAD
 while (cb.pop(msg)) {
   Serial.print("Processing msg id="); Serial.print(msg.messageId);
   Serial.print(" cmd="); Serial.print(commandToString(msg.command));
@@ -317,3 +421,23 @@ void send_message(CommandType cmd, int32_t param, uint8_t messageId) {
 #ifdef __cplusplus
 }
 #endif
+=======
+  while (cb.pop(msg)) {
+    Serial.print("[PROCESSING CMD] id="); Serial.print(msg.messageId);
+    Serial.print(" cmd="); Serial.print(commandToString(msg.command));
+    Serial.print(" param="); Serial.println(msg.param);
+    fsm_handle_command(&fsm_ctx, msg);
+  }
+
+  // Non-blocking state machine stepping
+  unsigned long now_micros = micros();
+  unsigned long step_period = step_period_from_pd(pd);
+
+  fsm_handle(&fsm_ctx, now_micros, step_period);
+
+  // Small yield to avoid busy loop
+  delay(1);
+}
+
+// (forward declarations moved earlier in the file)
+>>>>>>> docs/nvs-migration
