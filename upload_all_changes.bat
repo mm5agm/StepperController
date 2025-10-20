@@ -6,7 +6,8 @@ REM cd /d "C:\Users\colin\OneDrive\Documents\PlatformIO\Projects\StepperControll
 
 git add -A
 
-set /p msg="Enter commit message: "
+echo Enter commit message: 
+set /p msg=
 
 git commit -m "%msg%"
 
