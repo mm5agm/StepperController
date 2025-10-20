@@ -10,6 +10,6 @@ set /p msg="Enter commit message: "
 
 git commit -m "%msg%"
 
-git push origin master
+git push origin main
 
 pause
