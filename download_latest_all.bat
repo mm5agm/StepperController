@@ -7,7 +7,7 @@ git pull
 echo Updating MagLoop_Common_Files submodule...
 cd MagLoop_Common_Files
 git fetch origin
-git checkout origin/main
+git reset --hard origin/main
 cd ..
 
 echo Done. Both repositories are now up to date.
