@@ -1,54 +1,20 @@
 
-This directory is intended for project specific (private) libraries.
-PlatformIO will compile them to static libraries and link into the executable file.
 
-The source code of each library should be placed in a separate directory
-("lib/your_library_name/[Code]").
-
-For example, see the structure of the following example libraries `Foo` and `Bar`:
-
-|--lib
-|  |
-|  |--Bar
-|  |  |--docs
 # Project `lib` directory
 
-This directory is intended for project-specific libraries used by this firmware.
-PlatformIO will compile each library found under `lib/` into a static library and link it into the final executable.
+This directory contains project-specific libraries for StepperController (limit switches version).
+Each library should be placed in its own subdirectory under `lib/`.
 
-Each library should live in its own subdirectory, e.g. `lib/Foo/` and `lib/Bar/`.
-
-Example layout:
-
+Example:
 ```
 lib/
-  ├─ Foo/
-  │   ├─ src/
-  │   │   └─ Foo.h
-  │   │   └─ Foo.cpp
-  │   └─ library.json  # optional
-  └─ Bar/
-      ├─ src/
-      │   └─ Bar.h
-      │   └─ Bar.cpp
-      └─ docs/
-
-src/
-  └─ main.cpp
-platformio.ini
+  ├── MyStepperLib/
+  │   ├── src/
+  │   │   └── MyStepperLib.h
+  │   │   └── MyStepperLib.cpp
+  │   └── library.json  # optional
 ```
 
-Example usage in `src/main.cpp`:
-
-```cpp
-#include <Foo.h>
-#include <Bar.h>
-
-int main() {
-  // ...
-}
-```
-
-PlatformIO's Library Dependency Finder (LDF) automatically discovers and links libraries referenced by your source files. See:
-
-- https://docs.platformio.org/page/librarymanager/ldf.html
+PlatformIO will automatically compile and link these libraries.
+See PlatformIO documentation for details:
+https://docs.platformio.org/page/librarymanager/ldf.html

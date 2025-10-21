@@ -1,38 +1,33 @@
 # StepperController
 
-ESP32-based stepper motor controller with ESP-NOW wireless communication for MagLoop antenna positioning.
+**Final Limit Switches Version**
 
-## 🎯 Overview
+This version uses hardware limit switches for position sensing and safety. All code and documentation reflect the last release before switching to optical sensors.
 
-This project provides precise stepper motor control for antenna positioning systems, featuring wireless communication with a touchscreen GUI controller. The system uses ESP-NOW for low-latency, peer-to-peer communication between the controller and GUI.
+## Overview
 
-## 🔧 Hardware Requirements
+StepperController is an ESP32-based stepper motor controller for MagLoop antenna positioning, featuring ESP-NOW wireless communication with a touchscreen GUI.
 
-### Main Components
-- **ESP32 DevKit V1** - Main microcontroller
-- **DM542 Stepper Motor Driver** - Digital stepper motor controller
-- **Stepper Motor** - NEMA 23 or compatible
-- **Limit Switches** - For position sensing and safety
-- **Power Supply** - 24V DC for stepper driver
+## Hardware Requirements
 
-### Pin Connections
+- ESP32 DevKit V1
+- DM542 Stepper Motor Driver
+- NEMA 23 Stepper Motor
+- Limit Switches (for position sensing)
+- 24V DC Power Supply
 
-| ESP32 Pin | Connection | Description |
-|-----------|------------|-------------|
-| GPIO 18   | DIR        | Direction signal to DM542 |
-| GPIO 19   | STEP       | Step pulse to DM542 |
-| GPIO 22   | DOWN_LIMIT | Down limit switch (INPUT_PULLUP) |
-| GPIO 23   | UP_LIMIT   | Up limit switch (INPUT_PULLUP) |
+## Pin Connections
 
-### DM542 Stepper Driver Configuration
-- **Microstepping**: Configurable via DIP switches
-- **Current Setting**: Adjust via DIP switches based on motor specifications
-- **Power**: 24V DC input recommended
-- **Control**: Step/Direction interface from ESP32
+| ESP32 Pin | Connection   | Description                       |
+|-----------|-------------|-----------------------------------|
+| GPIO 18   | DIR         | Direction signal to DM542          |
+| GPIO 19   | STEP        | Step pulse to DM542                |
+| GPIO 22   | DOWN_LIMIT  | Down limit switch (INPUT_PULLUP)   |
+| GPIO 23   | UP_LIMIT    | Up limit switch (INPUT_PULLUP)     |
 
-## 📡 Communication Protocol
+## Communication Protocol
 
-Uses ESP-NOW for wireless communication with the StepperGUI touchscreen controller.
+ESP-NOW wireless protocol with StepperGUI touchscreen controller.
 
 ### Message Format
 ```cpp
@@ -44,41 +39,32 @@ typedef struct __attribute__((packed)) {
 ```
 
 ### Supported Commands
-- **Movement**: `CMD_UP_SLOW`, `CMD_UP_MEDIUM`, `CMD_UP_FAST`
-- **Movement**: `CMD_DOWN_SLOW`, `CMD_DOWN_MEDIUM`, `CMD_DOWN_FAST`
-- **Positioning**: `CMD_MOVE_TO` (absolute position)
-- **Control**: `CMD_STOP`, `CMD_RESET`
-- **Status**: `CMD_GET_POSITION`, `CMD_DOWN_LIMIT_STATUS`
+- Movement: `CMD_UP_SLOW`, `CMD_UP_MEDIUM`, `CMD_UP_FAST`, `CMD_DOWN_SLOW`, `CMD_DOWN_MEDIUM`, `CMD_DOWN_FAST`
+- Positioning: `CMD_MOVE_TO`
+- Control: `CMD_STOP`, `CMD_RESET`
+- Status: `CMD_GET_POSITION`, `CMD_DOWN_LIMIT_STATUS`
 
-## 🚀 Features
+## Features
 
-- **Non-blocking operation** - Responsive to commands during movement
-- **Position feedback** - Real-time position updates to GUI (100ms intervals)
-- **Safety limits** - Hardware limit switch integration
-- **Speed control** - Multiple speed settings (slow/medium/fast)
-- **Automatic reset cascade** - Controller restart triggers GUI restart
-- **Message queuing** - ESP-NOW callbacks queue commands for main loop processing
+- Non-blocking operation
+- Real-time position feedback to GUI
+- Hardware limit switch integration
+- Multiple speed settings
+- Message queuing for ESP-NOW
 
-## 🛠 Build and Upload
-
-Quick start (PowerShell)
+## Build and Upload
 
 ```powershell
-# Build the project
 platformio run
-
-# Upload to the esp32doit-devkit-v1 environment (replace COM3 with your port)
 platformio run -e esp32doit-devkit-v1 --target upload --upload-port COM3
-
-# Open the serial monitor at 115200 baud
 platformio device monitor --baud 115200
 ```
 
 ## Project layout
 
 ```
-.
-├─ src/
+.  (limit switches version)
+├── src/
 │  └─ main.cpp
 ├─ MagLoop_Common_Files/   # Git submodule with shared headers
 ├─ lib/
