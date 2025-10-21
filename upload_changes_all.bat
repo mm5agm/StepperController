@@ -37,6 +37,7 @@ if %errorlevel%==0 (
     git add .
     echo After staging:
     git status --short
+    git checkout main
     git pull origin main
     git commit -m "Update MagLoop_Common_Files"
     git push origin main

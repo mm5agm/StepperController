@@ -1,11 +1,3 @@
-MM MagLoop_Common_Files
-M  README.md
-A  cleanup_branches.bat
-A  delete_old_branches_and_push_main.bat
-M  include/README
-M  lib/README
-M  platformio.ini
-AM temp_status.txt
-M  test/README
-M  upload_all_changes.bat
-MM upload_changes_all.bat
+ M MagLoop_Common_Files
+ M temp_status.txt
+ M upload_changes_all.bat
