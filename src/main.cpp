@@ -8,12 +8,12 @@
 #include "circular_buffer.h"
 #include <Preferences.h>
 #include "fsm/fsm.h"
-#include "commandToString.h"
-#include "send_message_bridge.h"
+// ...existing code...
+
 Preferences prefs;
 StepperContext fsm_ctx;
 // Replace with your GUI MAC address (update to your GUI device)
-const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C };
+const uint8_t GUI_MAC[] = { 0x98, 0xA3, 0x16, 0xE3, 0xFD, 0x4C }; // 98:A3:16:E3:FD:4C
 
 // Command buffer for deferring work from ISR/callback to loop()
 CircularBuffer<Message, 16> cb;
@@ -74,7 +74,9 @@ void on_data_recv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   else Serial.printf("ACK send failed: %d\n", r);
 }
 
-// Optional send callback for logging (older signature for PlatformIO compatibility)
+
+
+// ESP-NOW send callback for logging
 void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   Serial.print("onDataSent to ");
@@ -253,6 +255,7 @@ void setup()
   Serial.println("Sending reset command to GUI...");
   send_message(CMD_RESET, STEPPER_PARAM_UNUSED, 0);
   delay(500); // Give time for message to be sent
+  Serial.print("My IP is ");WiFi.localIP().toString(); Serial.println();
 }
 
 void loop()

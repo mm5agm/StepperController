@@ -1,8 +1,0 @@
- M MagLoop_Common_Files
- M download_latest_all.bat
- M platformio.ini
- M src/fsm/fsm.cpp
- M src/fsm/fsm.h
- M src/main.cpp
- M src/stepper_helpers.cpp
- M temp_status.txt

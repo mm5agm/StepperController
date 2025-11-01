@@ -1,8 +1,8 @@
+#define D0_PIN 2
 #include "fsm.h"
 #include "stepper_helpers.h"
-#include "send_message_bridge.h"
 #include <Preferences.h>
-#include <Preferences.h>
+
 
 extern void send_message(CommandType cmd, int32_t param, uint8_t messageId = 0);
 // ...existing code...
@@ -22,6 +22,9 @@ void fsm_init(StepperContext *ctx) {
     ctx->pd = slow_pd;
     ctx->stop_flag = true;
     ctx->direction = true;
+
+    // Initialize TCRT5000 digital output pin
+    pinMode(2, INPUT);
 }
 
 // Helper for move-to operation
@@ -43,6 +46,7 @@ static void fsm_start_move_to(StepperContext *ctx, int pos) {
 }
 
 void fsm_handle_command(StepperContext *ctx, const Message &msg) {
+    // All case labels must be inside the switch below
     Serial.print("[FSM] Handling command: ");
     Serial.print(commandToString(msg.command));
     Serial.print(" param=");
@@ -59,6 +63,37 @@ void fsm_handle_command(StepperContext *ctx, const Message &msg) {
             ctx->stop_flag = true;
             ctx->state = STATE_IDLE;
             send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
+        case CMD_HOME:
+            Serial.println("[FSM] CMD_HOME received");
+            // Start homing procedure here
+            ctx->state = STATE_MOVE_TO_HOME;
+            send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
+        case CMD_SENSOR_STATUS:
+            Serial.println("[FSM] CMD_SENSOR_STATUS received");
+            // Read and report sensor status (e.g., TCRT5000)
+            send_message(CMD_SENSOR_STATUS, digitalRead(2), msg.messageId);
+            break;
+        case CMD_MOVE_TO_HOME:
+            Serial.println("[FSM] CMD_MOVE_TO_HOME received");
+            // Move down until TCRT5000 sensor detects the white mark (LOW on pin 2)
+            ctx->stop_flag = false;
+            ctx->state = STATE_MOVE_TO_HOME;
+            send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
+        case CMD_HOME_COMPLETE:
+            Serial.println("[FSM] CMD_HOME_COMPLETE received");
+            send_message(CMD_HOME_COMPLETE, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
+        case CMD_HOME_FAILED:
+            Serial.println("[FSM] CMD_HOME_FAILED received");
+            send_message(CMD_HOME_FAILED, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
+        case CMD_SENSOR_ERROR:
+            Serial.println("[FSM] CMD_SENSOR_ERROR received");
+            send_message(CMD_SENSOR_ERROR, STEPPER_PARAM_UNUSED, msg.messageId);
+            break;
             break;
         case CMD_UP_SLOW:
             Serial.println("[FSM] CMD_UP_SLOW received");
@@ -139,14 +174,7 @@ void fsm_handle_command(StepperContext *ctx, const Message &msg) {
             Serial.print("Updated moveto_pd to "); Serial.println(moveto_pd);
             send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
             break;
-        case CMD_MOVE_TO_DOWN_LIMIT:
-            ctx->stop_flag = false; ctx->state = STATE_MOVE_TO_DOWN_LIMIT;
-            send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
-            break;
         // ...existing code...
-        case CMD_REQUEST_DOWN_STOP:
-            send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
-            break;
         case CMD_GET_POSITION:
             send_message(CMD_GET_POSITION, ctx->position, msg.messageId);
             break;
@@ -217,9 +245,23 @@ void fsm_handle(StepperContext *ctx, unsigned long now_micros, unsigned long ste
                 }
             }
             break;
-        case STATE_MOVE_TO_DOWN_LIMIT:
+        case STATE_MOVE_TO_HOME: {
+            // Use TCRT5000 digital output on pin 2 for limit detection
             if (ctx->stop_flag) {
-                ctx->stop_flag = true; ctx->state = STATE_IDLE; ctx->position = STEPPER_POSITION_MIN; break;
+                ctx->stop_flag = true;
+                ctx->state = STATE_IDLE;
+                ctx->position = STEPPER_POSITION_MIN;
+                break;
+            }
+            // Read TCRT5000 digital output (LOW = detected, HIGH = not detected)
+            int tcrt5000_state = digitalRead(2);
+            if (tcrt5000_state == LOW) { // Detected (reflective surface or object present)
+                Serial.println("[FSM] TCRT5000 detected: at down limit");
+                ctx->stop_flag = true;
+                ctx->state = STATE_IDLE;
+                ctx->position = STEPPER_POSITION_MIN;
+                send_message(CMD_POSITION, ctx->position);
+                break;
             }
             if (now_micros - last_step_micros >= step_period) {
                 single_step(pd, false);
@@ -230,6 +272,7 @@ void fsm_handle(StepperContext *ctx, unsigned long now_micros, unsigned long ste
                 }
             }
             break;
+        }
         case STATE_RESETTING:
         case STATE_IDLE:
         default:
