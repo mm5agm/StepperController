@@ -66,7 +66,9 @@ void on_data_recv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
   ack.messageId = msg.messageId;
   ack.command = CMD_ACK;
   ack.param = 0;
-  Serial.print("[SENT CMD] ACK to sender: id="); Serial.print(ack.messageId);
+  Serial.print("[SENT CMD] ACK to sender: id="); 
+  Serial.print(ack.messageId);Serial.print("    CMD = ");
+  Serial.println(commandToString(ack.command));
   Serial.print(" cmd="); Serial.print(commandToString(ack.command));
   Serial.print(" param="); Serial.println(ack.param);
   esp_err_t r = esp_now_send(mac_addr, (uint8_t *)&ack, sizeof(ack));

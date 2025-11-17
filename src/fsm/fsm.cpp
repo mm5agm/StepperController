@@ -182,9 +182,11 @@ void fsm_handle_command(StepperContext *ctx, const Message &msg) {
             ctx->stop_flag = true;
             ctx->state = STATE_RESETTING;
             send_message(CMD_ACK, STEPPER_PARAM_UNUSED, msg.messageId);
-            Serial.println("Reset command received - restarting controller...");
+            Serial.println("[DEBUG] CMD_RESET received: preparing to restart controller...");
             delay(100);
+            Serial.println("[DEBUG] Calling ESP.restart() now...");
             ESP.restart();
+            Serial.println("[DEBUG] ESP.restart() returned (should not happen)");
             break;
         default:
             // Unknown command
@@ -256,11 +258,11 @@ void fsm_handle(StepperContext *ctx, unsigned long now_micros, unsigned long ste
             // Read TCRT5000 digital output (LOW = detected, HIGH = not detected)
             int tcrt5000_state = digitalRead(2);
             if (tcrt5000_state == LOW) { // Detected (reflective surface or object present)
-                Serial.println("[FSM] TCRT5000 detected: at down limit");
+                Serial.println("[FSM] TCRT5000 detected: at home (white mark)");
                 ctx->stop_flag = true;
                 ctx->state = STATE_IDLE;
                 ctx->position = STEPPER_POSITION_MIN;
-                send_message(CMD_POSITION, ctx->position);
+                send_message(CMD_HOME_COMPLETE, ctx->position); // Notify home complete
                 break;
             }
             if (now_micros - last_step_micros >= step_period) {
