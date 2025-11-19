@@ -1,29 +1,28 @@
 # StepperController
 
-**Final Limit Switches Version**
-
-This version uses hardware limit switches for position sensing and safety. All code and documentation reflect the last release before switching to optical sensors.
-
 ## Overview
 
-StepperController is an ESP32-based stepper motor controller for MagLoop antenna positioning, featuring ESP-NOW wireless communication with a touchscreen GUI.
+Use at your own risk. 
+
+This version works for me, it might not work for you. 
+
+I've stopped work on this project for the time being.
+
+StepperController is an ESP32-based stepper motor controller for MagLoop antenna positioning, featuring ESP-NOW wireless communication with a touchscreen GUI (stepperGUI). This version uses a TCRT5000 optical sensor for homing and position detection. Limit switches are not used; all position sensing is handled by the IR sensor.
 
 ## Hardware Requirements
-
-- ESP32 DevKit V1
-- DM542 Stepper Motor Driver
-- NEMA 23 Stepper Motor
-- Limit Switches (for position sensing)
-- 24V DC Power Supply
-
+* ESP32 DevKit V1
+* DM542 Stepper Motor Driver
+* NEMA 23 Stepper Motor
+* TCRT5000 IR Optical Sensor (for homing)
+* 24V DC Power Supply
 ## Pin Connections
 
 | ESP32 Pin | Connection   | Description                       |
 |-----------|-------------|-----------------------------------|
 | GPIO 18   | DIR         | Direction signal to DM542          |
 | GPIO 19   | STEP        | Step pulse to DM542                |
-| GPIO 22   | DOWN_LIMIT  | Down limit switch (INPUT_PULLUP)   |
-| GPIO 23   | UP_LIMIT    | Up limit switch (INPUT_PULLUP)     |
+| GPIO 2    | TCRT5000    | Optical sensor digital output (INPUT) |
 
 ## Communication Protocol
 
@@ -39,19 +38,13 @@ typedef struct __attribute__((packed)) {
 ```
 
 ### Supported Commands
-- Movement: `CMD_UP_SLOW`, `CMD_UP_MEDIUM`, `CMD_UP_FAST`, `CMD_DOWN_SLOW`, `CMD_DOWN_MEDIUM`, `CMD_DOWN_FAST`
-- Positioning: `CMD_MOVE_TO`
-- Control: `CMD_STOP`, `CMD_RESET`
-- Status: `CMD_GET_POSITION`, `CMD_DOWN_LIMIT_STATUS`
 
 ## Features
-
-- Non-blocking operation
-- Real-time position feedback to GUI
-- Hardware limit switch integration
-- Multiple speed settings
-- Message queuing for ESP-NOW
-
+* Non-blocking operation
+* Real-time position feedback to GUI
+* Optical sensor homing (TCRT5000)
+* Multiple speed settings
+* Message queuing for ESP-NOW
 ## Build and Upload
 
 ```powershell
@@ -97,11 +90,9 @@ upload_changes_all.bat
 States include `STATE_IDLE`, `STATE_MOVING_UP`, `STATE_MOVING_DOWN`, `STATE_MOVING_TO`, `STATE_MOVE_TO_DOWN_LIMIT`, and `STATE_RESETTING`.
 
 ## Troubleshooting
-
-- ESP-NOW issues: verify MAC addresses and peer configuration
-- Motor not moving: check wiring, DM542 enable/config and power
-- Limit switches: confirm INPUT_PULLUP wiring and logic
-
+* ESP-NOW issues: verify MAC addresses and peer configuration
+* Motor not moving: check wiring, DM542 enable/config and power
+* Optical sensor: verify TCRT5000 wiring and digital output logic
 ## Contributing
 
 1. Fork
@@ -111,6 +102,5 @@ States include `STATE_IDLE`, `STATE_MOVING_UP`, `STATE_MOVING_DOWN`, `STATE_MOVI
 5. Test controller + GUI
 6. Submit PR
 
----
 
 See also: StepperGUI (GUI project) and MagLoop_Common_Files (shared headers)

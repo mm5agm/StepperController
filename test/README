@@ -1,9 +1,1 @@
 
-
-# Project `test` directory
-
-This directory contains PlatformIO unit tests for StepperController (limit switches version).
-Add test files here to verify individual modules and features.
-
-See PlatformIO documentation for details:
-https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
